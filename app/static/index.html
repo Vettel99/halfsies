@@ -5,33 +5,78 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Halfsies balances</title>
   <style>
-    body { font-family: system-ui, sans-serif; max-width: 480px; margin: 2rem auto; padding: 0 16px; color: #222; }
-    h1 { font-size: 1.4rem; }
-    table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
-    td { padding: .4rem 0; border-bottom: 1px solid #eee; }
-    td.amt { text-align: right; font-variant-numeric: tabular-nums; }
-    .pos { color: #1a7f37; } .neg { color: #c62828; }
-    .error { color: #c62828; }
+    :root {
+      --bg: #f6f7f9; --card: #ffffff; --text: #1d2330; --muted: #6b7280; --line: #e5e7eb;
+      --pos: #15803d; --pos-bg: #dcfce7; --neg: #b91c1c; --neg-bg: #fee2e2;
+      --accent: #4f46e5; --accent-text: #ffffff;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #111318; --card: #1b1e25; --text: #e7e9ee; --muted: #9aa1ad; --line: #2b2f38;
+        --pos: #4ade80; --pos-bg: #14532d55; --neg: #f87171; --neg-bg: #7f1d1d55;
+        --accent: #818cf8; --accent-text: #111318;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; background: var(--bg); color: var(--text);
+      font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+    }
+    main { max-width: 520px; margin: 0 auto; padding: 32px 16px; }
+    h1 { font-size: 1.5rem; margin: 0 0 4px; }
+    .sub { color: var(--muted); margin: 0 0 20px; }
+    h2 { font-size: .8rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 24px 0 8px; }
+
+    form { display: flex; gap: 8px; }
+    input {
+      flex: 1; min-width: 0; padding: 9px 12px; font: inherit; color: var(--text);
+      background: var(--card); border: 1px solid var(--line); border-radius: 8px;
+    }
+    button {
+      padding: 9px 16px; font: inherit; font-weight: 600; border: 0; border-radius: 8px;
+      background: var(--accent); color: var(--accent-text); cursor: pointer;
+    }
+    input:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+    .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+    .row { display: flex; align-items: center; gap: 12px; padding: 12px 16px; }
+    .row + .row { border-top: 1px solid var(--line); }
+    .avatar {
+      flex: none; width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center;
+      font-weight: 600; text-transform: uppercase; background: var(--line);
+    }
+    .name { flex: 1; }
+    .amt { font-variant-numeric: tabular-nums; font-weight: 600; padding: 2px 8px; border-radius: 6px; }
+    .pos { color: var(--pos); background: var(--pos-bg); }
+    .neg { color: var(--neg); background: var(--neg-bg); }
+    .zero { color: var(--muted); }
+    .arrow { color: var(--muted); }
+    .empty { padding: 16px; color: var(--muted); text-align: center; }
+    .error { padding: 12px 16px; border-radius: 8px; color: var(--neg); background: var(--neg-bg); }
   </style>
 </head>
 <body>
-  <h1>Halfsies</h1>
-  <form id="f">
-    <label>Household <input id="hid" value="flat-1"></label>
-    <button>Load</button>
-  </form>
-  <div id="out"></div>
+  <main>
+    <h1>Halfsies</h1>
+    <p class="sub">Who owes whom, and the simplest way to settle up.</p>
+    <form id="f">
+      <input id="hid" value="flat-1" aria-label="Household ID" placeholder="Household ID">
+      <button>Load</button>
+    </form>
+    <div id="out" aria-live="polite"></div>
+  </main>
 
   <script>
     // Format integer paise as rupees without ever going through floats.
-    function rupees(paise) {
-      const sign = paise < 0 ? "−" : paise > 0 ? "+" : "";
+    function rupees(paise, signed = true) {
+      const sign = !signed ? "" : paise < 0 ? "−" : paise > 0 ? "+" : "";
       const abs = Math.abs(paise);
       const whole = Math.floor(abs / 100).toLocaleString("en-IN");
       const frac = String(abs % 100).padStart(2, "0");
       return `${sign}₹${whole}.${frac}`;
     }
     const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+    const avatar = name => `<span class="avatar" aria-hidden="true">${esc(name[0] || "?")}</span>`;
 
     async function load(e) {
       e && e.preventDefault();
@@ -39,15 +84,23 @@
       const id = document.getElementById("hid").value.trim();
       const res = await fetch(`/households/${encodeURIComponent(id)}/balances`);
       const data = await res.json();
-      if (!res.ok) { out.innerHTML = `<p class="error">${esc(data.error)}</p>`; return; }
+      if (!res.ok) { out.innerHTML = `<h2>Error</h2><p class="error">${esc(data.error)}</p>`; return; }
 
-      const rows = Object.entries(data.balances).map(([m, p]) =>
-        `<tr><td>${esc(m)}</td><td class="amt ${p > 0 ? "pos" : p < 0 ? "neg" : ""}">${rupees(p)}</td></tr>`).join("");
+      const rows = Object.entries(data.balances).map(([m, p]) => {
+        const cls = p > 0 ? "pos" : p < 0 ? "neg" : "zero";
+        return `<div class="row">${avatar(m)}<span class="name">${esc(m)}</span>` +
+               `<span class="amt ${cls}">${rupees(p)}</span></div>`;
+      }).join("");
+
       const pays = data.suggested_payments.length
         ? data.suggested_payments.map(p =>
-            `<li>${esc(p.from)} pays ${esc(p.to)} ${rupees(p.amount_paise).replace("+", "")}</li>`).join("")
-        : "<li>Everyone is settled up.</li>";
-      out.innerHTML = `<h2>Balances</h2><table>${rows}</table><h2>To settle up</h2><ul>${pays}</ul>`;
+            `<div class="row">${avatar(p.from)}<span class="name">${esc(p.from)} ` +
+            `<span class="arrow">→</span> ${esc(p.to)}</span>` +
+            `<span class="amt">${rupees(p.amount_paise, false)}</span></div>`).join("")
+        : `<p class="empty">Everyone is settled up.</p>`;
+
+      out.innerHTML = `<h2>Balances</h2><div class="card">${rows}</div>` +
+                      `<h2>To settle up</h2><div class="card">${pays}</div>`;
     }
     document.getElementById("f").addEventListener("submit", load);
     load();
