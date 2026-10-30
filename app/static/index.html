@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Halfsies balances</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 480px; margin: 2rem auto; padding: 0 16px; color: #222; }
+    h1 { font-size: 1.4rem; }
+    table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
+    td { padding: .4rem 0; border-bottom: 1px solid #eee; }
+    td.amt { text-align: right; font-variant-numeric: tabular-nums; }
+    .pos { color: #1a7f37; } .neg { color: #c62828; }
+    .error { color: #c62828; }
+  </style>
+</head>
+<body>
+  <h1>Halfsies</h1>
+  <form id="f">
+    <label>Household <input id="hid" value="flat-1"></label>
+    <button>Load</button>
+  </form>
+  <div id="out"></div>
+
+  <script>
+    // Format integer paise as rupees without ever going through floats.
+    function rupees(paise) {
+      const sign = paise < 0 ? "−" : paise > 0 ? "+" : "";
+      const abs = Math.abs(paise);
+      const whole = Math.floor(abs / 100).toLocaleString("en-IN");
+      const frac = String(abs % 100).padStart(2, "0");
+      return `${sign}₹${whole}.${frac}`;
+    }
+    const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+    async function load(e) {
+      e && e.preventDefault();
+      const out = document.getElementById("out");
+      const id = document.getElementById("hid").value.trim();
+      const res = await fetch(`/households/${encodeURIComponent(id)}/balances`);
+      const data = await res.json();
+      if (!res.ok) { out.innerHTML = `<p class="error">${esc(data.error)}</p>`; return; }
+
+      const rows = Object.entries(data.balances).map(([m, p]) =>
+        `<tr><td>${esc(m)}</td><td class="amt ${p > 0 ? "pos" : p < 0 ? "neg" : ""}">${rupees(p)}</td></tr>`).join("");
+      const pays = data.suggested_payments.length
+        ? data.suggested_payments.map(p =>
+            `<li>${esc(p.from)} pays ${esc(p.to)} ${rupees(p.amount_paise).replace("+", "")}</li>`).join("")
+        : "<li>Everyone is settled up.</li>";
+      out.innerHTML = `<h2>Balances</h2><table>${rows}</table><h2>To settle up</h2><ul>${pays}</ul>`;
+    }
+    document.getElementById("f").addEventListener("submit", load);
+    load();
+  </script>
+</body>
+</html>
