@@ -26,7 +26,13 @@ SEED_HOUSEHOLDS = {"flat-1": ["asha", "ben", "chitra"]}
 
 # ---------- request models ----------
 
-class HouseholdIn(BaseModel):
+class StrictBody(BaseModel):
+    # Reject unknown fields so typos like "amount_rupees" or "splitBetween" fail
+    # loudly instead of being silently ignored.
+    model_config = ConfigDict(extra="forbid")
+
+
+class HouseholdIn(StrictBody):
     id: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=50)]
     members: list[MemberName] = Field(min_length=1)
 
@@ -38,7 +44,7 @@ class HouseholdIn(BaseModel):
         return v
 
 
-class ExpenseIn(BaseModel):
+class ExpenseIn(StrictBody):
     paid_by: MemberName
     amount_paise: PositivePaise
     split_between: list[MemberName]
@@ -53,10 +59,8 @@ class ExpenseIn(BaseModel):
         return v
 
 
-class SettlementIn(BaseModel):
+class SettlementIn(StrictBody):
     # "from" is a Python keyword, so map it via an alias.
-    model_config = ConfigDict(populate_by_name=True)
-
     from_member: MemberName = Field(alias="from")
     to_member: MemberName = Field(alias="to")
     amount_paise: PositivePaise
@@ -193,7 +197,10 @@ def _format_validation_errors(exc: RequestValidationError) -> str:
     for err in exc.errors():
         # loc looks like ("body", "amount_paise") or ("body", "split_between", 0)
         field = ".".join(str(part) for part in err["loc"] if part != "body")
-        msg = err["msg"].removeprefix("Value error, ")
+        if err["type"] == "extra_forbidden":
+            msg = "unknown field"
+        else:
+            msg = err["msg"].removeprefix("Value error, ")
         messages.append(f"{field}: {msg}" if field else msg)
     return "; ".join(messages)
 

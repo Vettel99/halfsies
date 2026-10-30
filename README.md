@@ -48,7 +48,7 @@ curl -X POST localhost:8000/households/flat-1/settlements -H 'Content-Type: appl
 
 Errors are always `{"error": "<readable message>"}`:
 
-- **422**: invalid body: amount zero/negative/over ₹10,00,000/not an integer, empty or duplicate `split_between`, unknown member, paying yourself, missing fields, malformed JSON, empty `Idempotency-Key`.
+- **422**: invalid body: amount zero/negative/over ₹10,00,000/not an integer, empty or duplicate `split_between`, unknown member, paying yourself, missing or unknown fields, malformed JSON, empty `Idempotency-Key`.
 - **404**: unknown household.
 - **409**: creating a household that already exists, or reusing an `Idempotency-Key` with a different body.
 
@@ -68,6 +68,7 @@ The money logic has no HTTP or storage dependencies, so most of the correctness 
 ## Decisions, trade-offs and assumptions
 
 - **Integers in paise everywhere.** Amounts must be JSON integers; `900.5`, `"90000"` and `true` are rejected (pydantic `StrictInt`) rather than silently converted. The web page formats paise to rupees with integer maths, never floats.
+- **Unknown fields are rejected, not ignored.** A body like `{"paid_by": "asha", "amount_rupees": 900, ...}` returns `amount_rupees: unknown field; amount_paise: Field required`. Silently dropping a field is how a typo or a rupees/paise mix-up turns into a wrong balance. *Trade-off:* clients must be updated in step with the API if a field is ever added, which is acceptable for an API that only the Halfsies app calls.
 - **Amounts capped at ₹10,00,000 (10⁸ paise).** *Assumption:* no single flat expense or settlement is larger than that; a bigger number is almost certainly rupees typed as paise or an extra zero, and it would poison everyone's balance. The limit is one constant (`MAX_AMOUNT_PAISE`) if the product disagrees.
 - **Optional idempotency keys on the POST endpoints.** Mobile clients retry on flaky networks; without a key, a retried "add ₹900 groceries" would be counted twice. With a key, the retry returns the original record. Keys are scoped per household and per endpoint; reusing one for a different body is a 409 rather than a silent mismatch; a request that fails validation doesn't use up its key, so the client can fix it and retry. *Trade-off:* the key is optional, because two identical expenses can be legitimate (two grocery runs). *Assumption:* keys live as long as the server process; with a database they'd expire after ~24h.
 - **Balances are derived, not stored.** `GET /balances` replays all expenses and settlements each time. This is simple and can never drift out of sync with the history; at household scale (dozens of entries) the cost is negligible. With a real database I'd still keep the ledger as the source of truth and cache the balances if needed.

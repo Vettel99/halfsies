@@ -167,6 +167,36 @@ def test_settlement_rejects_paying_yourself(client):
     assert "themselves" in r.json()["error"]
 
 
+# ---------- unknown fields ----------
+
+@pytest.mark.parametrize(
+    "path, body, extra",
+    [
+        ("expenses", EXPENSE, "amount_rupees"),
+        ("settlements", SETTLEMENT, "note"),
+        ("settlements", SETTLEMENT, "from_member"),  # Python-side name isn't a valid JSON key
+    ],
+)
+def test_unknown_fields_are_rejected(client, path, body, extra):
+    r = client.post(f"{H}/{path}", json={**body, extra: 9})
+    assert r.status_code == 422
+    assert r.json()["error"] == f"{extra}: unknown field"
+
+
+def test_misspelled_field_names_the_typo_and_the_missing_field(client):
+    body = {"paid_by": "asha", "amount_paise": 900, "splitBetween": ["asha"]}
+    r = client.post(f"{H}/expenses", json=body)
+    assert r.status_code == 422
+    assert "splitBetween: unknown field" in r.json()["error"]
+    assert "split_between: Field required" in r.json()["error"]
+
+
+def test_unknown_field_on_household_is_rejected(client):
+    r = client.post("/households", json={"id": "flat-3", "members": ["x"], "owner": "x"})
+    assert r.status_code == 422
+    assert "owner: unknown field" in r.json()["error"]
+
+
 # ---------- amount limit ----------
 
 @pytest.mark.parametrize("path, body", [("expenses", EXPENSE), ("settlements", SETTLEMENT)])
