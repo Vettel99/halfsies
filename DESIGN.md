@@ -52,4 +52,4 @@ inside the same DB transaction that inserts the settlement (`settlements.payment
 ## Assumptions
 
 - The partner accepts our own reference ID, has a status-check API and a daily report (standard for Indian UPI aggregators).
-- Cash settlements (the existing `POST /settlements`) skip this flow and are recorded directly; they'd also accept a `client_request_id` so a retried request doesn't record the same cash payment twice.
+- Cash settlements (the existing `POST /settlements`) skip this flow and are recorded directly. They already take an `Idempotency-Key` header, the same idea as `client_request_id` above, so a retried request doesn't record the same cash payment twice.

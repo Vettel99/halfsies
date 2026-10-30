@@ -3,17 +3,23 @@
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Header, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, StringConstraints, field_validator
 
 from app.ledger import Expense, Settlement, compute_balances, suggest_payments
-from app.store import Conflict, InvalidInput, NotFound, Store
+from app.store import Conflict, ExpenseRecord, InvalidInput, NotFound, SettlementRecord, Store
+
+# Assumption: no single household expense or settlement exceeds ₹10,00,000.
+# Anything larger is almost certainly a typo (e.g. rupees entered as paise).
+MAX_AMOUNT_PAISE = 10_00_000 * 100
 
 MemberName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=50)]
 # StrictInt rejects 900.5, "900" and true; gt=0 rejects zero and negatives.
-PositivePaise = Annotated[StrictInt, Field(gt=0)]
+PositivePaise = Annotated[StrictInt, Field(gt=0, le=MAX_AMOUNT_PAISE)]
+# Optional header so a client can safely retry a POST without recording it twice.
+IdempotencyKey = Annotated[str | None, Header(alias="Idempotency-Key", min_length=1, max_length=255)]
 
 SEED_HOUSEHOLDS = {"flat-1": ["asha", "ben", "chitra"]}
 
@@ -96,43 +102,55 @@ def create_app(seed: bool = True) -> FastAPI:
         return {"id": household.id, "members": household.members}
 
     @app.post("/households/{household_id}/expenses", status_code=201)
-    def add_expense(household_id: str, body: ExpenseIn) -> dict:
-        expense = store.add_expense(
+    def add_expense(
+        household_id: str,
+        body: ExpenseIn,
+        response: Response,
+        idempotency_key: IdempotencyKey = None,
+    ) -> dict:
+        record, replayed = store.add_expense(
             household_id,
             Expense(
                 paid_by=body.paid_by,
                 amount_paise=body.amount_paise,
                 split_between=tuple(body.split_between),
             ),
+            idempotency_key,
         )
-        return {
-            "paid_by": expense.paid_by,
-            "amount_paise": expense.amount_paise,
-            "split_between": list(expense.split_between),
-        }
+        if replayed:
+            response.headers["Idempotent-Replayed"] = "true"
+        return _expense_json(record)
 
     @app.post("/households/{household_id}/settlements", status_code=201)
-    def add_settlement(household_id: str, body: SettlementIn) -> dict:
+    def add_settlement(
+        household_id: str,
+        body: SettlementIn,
+        response: Response,
+        idempotency_key: IdempotencyKey = None,
+    ) -> dict:
         if body.from_member == body.to_member:
             raise InvalidInput("a member cannot pay themselves")
-        settlement = store.add_settlement(
+        record, replayed = store.add_settlement(
             household_id,
             Settlement(
                 from_member=body.from_member,
                 to_member=body.to_member,
                 amount_paise=body.amount_paise,
             ),
+            idempotency_key,
         )
-        return {
-            "from": settlement.from_member,
-            "to": settlement.to_member,
-            "amount_paise": settlement.amount_paise,
-        }
+        if replayed:
+            response.headers["Idempotent-Replayed"] = "true"
+        return _settlement_json(record)
 
     @app.get("/households/{household_id}/balances")
     def get_balances(household_id: str) -> dict:
         household = store.get_household(household_id)
-        balances = compute_balances(household.members, household.expenses, household.settlements)
+        balances = compute_balances(
+            household.members,
+            [r.expense for r in household.expenses],
+            [r.settlement for r in household.settlements],
+        )
         return {
             "household_id": household.id,
             "balances": balances,
@@ -147,6 +165,26 @@ def create_app(seed: bool = True) -> FastAPI:
         return FileResponse(Path(__file__).parent / "static" / "index.html")
 
     return app
+
+
+def _expense_json(record: ExpenseRecord) -> dict:
+    return {
+        "id": record.id,
+        "created_at": record.created_at.isoformat(),
+        "paid_by": record.expense.paid_by,
+        "amount_paise": record.expense.amount_paise,
+        "split_between": list(record.expense.split_between),
+    }
+
+
+def _settlement_json(record: SettlementRecord) -> dict:
+    return {
+        "id": record.id,
+        "created_at": record.created_at.isoformat(),
+        "from": record.settlement.from_member,
+        "to": record.settlement.to_member,
+        "amount_paise": record.settlement.amount_paise,
+    }
 
 
 def _format_validation_errors(exc: RequestValidationError) -> str:
